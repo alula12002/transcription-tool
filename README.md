@@ -1,6 +1,6 @@
 # Transcript Studio
 
-A local web application for transcribing and refining oral history interviews. Upload audio recordings, transcribe with OpenAI Whisper, refine with Claude, and download polished transcripts.
+A web application for transcribing and refining oral history interviews. Upload audio recordings, transcribe with OpenAI Whisper, refine with Claude, and download polished transcripts.
 
 Built for preserving family stories — the narrator's authentic voice is maintained while transforming raw speech-to-text into readable, organized prose.
 
@@ -11,7 +11,7 @@ Built for preserving family stories — the narrator's authentic voice is mainta
 - **Refine** with three AI-powered modes (see below)
 - **Download** as `.txt` or `.md` with proper formatting
 - **Re-refine** with different modes without re-transcribing
-- **Cost tracking** in the sidebar for full session visibility
+- **Two interfaces**: Streamlit standalone UI or REST API for custom frontends
 
 ## Refinement Modes
 
@@ -63,15 +63,72 @@ Get keys from:
 
 ### 4. Run the app
 
+**Option A — Streamlit UI** (standalone, local use):
 ```bash
-streamlit run app.py
+python3 -m streamlit run app.py
+```
+Opens at http://localhost:8501. Has a 200MB upload limit (Streamlit default).
+
+**Option B — FastAPI backend** (for custom frontends):
+```bash
+python3 -m uvicorn api.main:app --reload
+```
+Opens at http://localhost:8000. Interactive API docs at http://localhost:8000/docs. No upload size limit.
+
+## API Overview
+
+When running the FastAPI backend, the full flow is:
+
+```
+POST /upload/zip          Upload a zip → get job_id
+POST /upload/audio        Upload audio files → get job_id
+POST /transcribe          Start transcription (async)
+GET  /jobs/{job_id}       Poll for status & progress
+GET  /estimate/{job_id}   Get refinement cost estimate
+POST /refine              Start refinement (async)
+GET  /download/{job_id}   Download transcript as text
 ```
 
-Opens in your browser at http://localhost:8501.
+Transcription and refinement run in background threads. Poll `GET /jobs/{job_id}` for progress (0.0 to 1.0) and status (`pending`, `processing`, `completed`, `failed`).
+
+See http://localhost:8000/docs for full interactive API documentation when the server is running.
+
+## Architecture
+
+```
+transcription-tool/
+├── app.py                 # Streamlit UI (standalone mode)
+├── api/
+│   ├── main.py            # FastAPI routes
+│   ├── schemas.py         # Pydantic request/response models
+│   └── jobs.py            # Job store (in-memory; swap for Supabase/Redis)
+├── core/
+│   ├── chunker.py         # Audio splitting with silence detection
+│   ├── transcriber.py     # Whisper API with prompt chaining
+│   ├── refiner.py         # Claude API with overlap deduplication
+│   └── exporter.py        # .txt and .md file export
+├── config/settings.py     # All constants and configuration
+├── prompts/               # System prompt templates per mode
+├── tests/                 # Full test suite (mocked API calls)
+├── output/                # Exported transcripts
+└── requirements.txt
+```
+
+The `core/` modules are framework-agnostic — they don't depend on Streamlit or FastAPI. Both `app.py` and `api/main.py` are thin wrappers that call into `core/`.
+
+### Deploying with a separate frontend
+
+To use a custom frontend (React/Next.js on Vercel, etc.):
+
+1. Deploy the **FastAPI backend** to Railway, Fly.io, or Render
+2. Set `CORS_ORIGINS` env var to your frontend's domain
+3. Point your frontend at the API endpoints above
+4. Swap `api/jobs.py` from `InMemoryJobStore` to a Supabase/Redis implementation for persistence
+5. For large file uploads, upload directly to Supabase Storage / S3 and pass the URL to the API
 
 ## Estimated Costs
 
-Costs depend on audio length and refinement mode. Rough estimates for a **1-hour interview**:
+Rough estimates for a **1-hour interview**:
 
 | Step | Estimated Cost |
 |------|---------------|
@@ -81,48 +138,28 @@ Costs depend on audio length and refinement mode. Rough estimates for a **1-hour
 | Refinement — Summary | ~$0.08 |
 | **Total (transcribe + refine)** | **~$0.44 – $0.66** |
 
-Actual costs depend on speech density and API pricing at time of use.
-
-## Project Structure
-
-```
-transcription-tool/
-├── app.py                 # Streamlit web UI
-├── config/settings.py     # All constants and configuration
-├── core/
-│   ├── chunker.py         # Audio splitting with silence detection
-│   ├── transcriber.py     # Whisper API with prompt chaining
-│   ├── refiner.py         # Claude API with overlap deduplication
-│   └── exporter.py        # .txt and .md file export
-├── prompts/               # System prompt templates per mode
-├── tests/                 # Full test suite (mocked API calls)
-├── output/                # Exported transcripts
-└── requirements.txt
-```
-
 ## Running Tests
 
 ```bash
 python3 -m pytest tests/ -v
 ```
 
-All API calls are mocked — no keys or network needed for tests. Some chunker tests require ffmpeg to be installed.
+All API calls are mocked — no keys or network needed for tests. Some chunker tests require ffmpeg.
 
 ## Known Limitations
 
-- **No speaker diarization** — Whisper transcribes all speakers as a single stream. Multi-speaker interviews show as one continuous block.
-- **Max file size** — Individual audio files are chunked to stay under Whisper's 25MB limit. Very long recordings (5+ hours) work but take longer.
-- **No streaming** — Refinement processes the full transcript before displaying results. Long transcripts may take a minute or two.
-- **English-focused** — Prompt templates are written for English. Whisper supports other languages but refinement quality may vary.
-- **No persistent storage** — Session state resets when the browser tab is closed. Use the download/export buttons to save your work.
-- **Single user** — Designed for local use. No authentication or multi-user support.
+- **No speaker diarization** — Whisper transcribes all speakers as a single stream
+- **No streaming** — Refinement completes fully before displaying results
+- **English-focused** — Prompt templates are written for English
+- **In-memory job store** — Jobs lost on server restart (swap for Supabase/Redis in production)
+- **Single worker** — Background threads, not a proper task queue (swap for Celery/Redis in production)
 
 ## Future Features
 
-- **Speaker diarization** — Identify and label different speakers in the transcript
-- **Batch processing** — Queue multiple recordings and process overnight
-- **Custom prompt templates** — Let users create and save their own refinement prompts
-- **Timestamp navigation** — Click a paragraph to hear the corresponding audio
-- **SRT/VTT export** — Subtitle file formats for video use
-- **Cloud deployment** — One-click deploy to Streamlit Cloud with secrets management
-- **Resume from failure** — Save intermediate state so a crash doesn't lose progress on long recordings
+- **Speaker diarization** — Identify and label different speakers
+- **Supabase integration** — Persistent storage, auth, direct file uploads
+- **Batch processing** — Queue multiple recordings
+- **Custom prompt templates** — User-created refinement prompts
+- **Timestamp navigation** — Click a paragraph to hear the audio
+- **SRT/VTT export** — Subtitle file formats
+- **Resume from failure** — Save intermediate state for long recordings

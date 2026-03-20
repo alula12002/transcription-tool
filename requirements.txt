@@ -1,5 +1,13 @@
-streamlit>=1.30.0
+# Core
 openai>=1.0.0
 anthropic>=0.18.0
 pydub>=0.25.1
 python-dotenv>=1.0.0
+
+# Streamlit UI (optional — for local standalone mode)
+streamlit>=1.30.0
+
+# FastAPI backend (for frontend/backend split)
+fastapi>=0.109.0
+uvicorn>=0.27.0
+python-multipart>=0.0.6
