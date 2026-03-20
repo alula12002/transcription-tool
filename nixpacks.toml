@@ -1,5 +1,5 @@
 [phases.setup]
-nixPkgs = ["ffmpeg"]
+nixPkgs = ["ffmpeg", "libopus", "libvorbis", "libflac", "libogg", "libsndfile"]
 
 [phases.install]
 cmds = ["pip install -r requirements.txt"]
