@@ -35,6 +35,7 @@ from api.schemas import (
 )
 
 load_dotenv()
+logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -155,13 +156,19 @@ async def upload_audio(files: list[UploadFile] = File(...)) -> UploadResponse:
         staged_paths = []
         for f in files:
             dest = os.path.join(staging_dir, f.filename or "audio.mp3")
+            logger.info("Saving uploaded file %s to %s", f.filename, dest)
             with open(dest, "wb") as out:
-                out.write(await f.read())
+                while chunk := await f.read(1024 * 1024):  # 1MB chunks
+                    out.write(chunk)
             staged_paths.append(dest)
+            logger.info("Saved %s (%.1f MB)", dest, os.path.getsize(dest) / 1024 / 1024)
 
+        logger.info("Starting audio processing for job %s", job.job_id)
         from core.chunker import process_audio_files
 
         result = process_audio_files(staged_paths, cleanup=False)
+        logger.info("Audio processing complete: %d chunks, %.1f seconds",
+                     result["num_chunks"], result["total_duration_seconds"])
         job_store.update(
             job.job_id,
             status=JobStatus.completed,
