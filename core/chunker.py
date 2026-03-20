@@ -205,9 +205,8 @@ def process_zip(zip_path: str, work_dir: str = "temp_audio") -> tuple[list[str],
 def convert_to_mp3(audio_path: str, output_dir: str) -> str:
     """Convert an audio file to mp3 (mono, at configured bitrate).
 
-    Uses pydub for format conversion. This is one of the few places where
-    the full file must be loaded, but conversion inputs are typically single
-    recordings, not concatenated mega-files.
+    Uses ffmpeg subprocess for conversion to avoid loading the entire file
+    into memory (pydub decompresses to raw PCM which can use hundreds of MB).
 
     Args:
         audio_path: Path to the input audio file.
@@ -216,7 +215,7 @@ def convert_to_mp3(audio_path: str, output_dir: str) -> str:
     Returns:
         Path to the output mp3 file.
     """
-    from pydub import AudioSegment
+    ffmpeg = _get_ffmpeg_path()
 
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
@@ -224,9 +223,17 @@ def convert_to_mp3(audio_path: str, output_dir: str) -> str:
     input_name = Path(audio_path).stem
     output_file = output_path / f"{input_name}.mp3"
 
-    audio = AudioSegment.from_file(audio_path)
-    audio = audio.set_channels(1)
-    audio.export(str(output_file), format="mp3", bitrate=AUDIO_BITRATE)
+    cmd = [
+        ffmpeg, "-y",
+        "-i", str(audio_path),
+        "-ac", "1",              # mono
+        "-b:a", AUDIO_BITRATE,   # e.g. "128k"
+        "-map", "a:0",
+        str(output_file),
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(f"ffmpeg conversion failed: {result.stderr}")
     logger.info(f"Converted to mp3: {output_file}")
     return str(output_file)
 
