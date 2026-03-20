@@ -1,0 +1,39 @@
+# Environment
+.env
+
+# Output files
+output/*.txt
+output/*.md
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Testing
+.pytest_cache/
+
+# Streamlit
+.streamlit/
+
+# Temp files from audio processing
+temp_audio/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
