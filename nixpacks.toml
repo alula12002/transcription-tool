@@ -1,8 +1,8 @@
 [phases.setup]
-nixPkgs = ["ffmpeg", "libopus", "libvorbis", "libflac", "libogg", "libsndfile"]
+nixPkgs = ["python312", "ffmpeg", "libopus", "libvorbis", "libflac", "libogg", "libsndfile"]
 
 [phases.install]
-cmds = ["pip install -r requirements.txt"]
+cmds = ["python3 -m pip install -r requirements.txt"]
 
 [start]
 cmd = "python3 -m uvicorn api.main:app --host 0.0.0.0 --port ${PORT:-8000}"
