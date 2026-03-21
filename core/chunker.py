@@ -359,7 +359,7 @@ def chunk_audio(mp3_path: str, max_duration_ms: int, output_dir: str) -> tuple[l
     return chunks, duration_ms
 
 
-def process_audio_files(audio_paths: list[str], cleanup: bool = False) -> dict:
+def process_audio_files(audio_paths: list[str], cleanup: bool = False, work_dir: str = "temp_audio") -> dict:
     """Process individual audio files: convert to mp3 and chunk.
 
     Same as process_upload but skips the zip extraction step. Used when
@@ -368,11 +368,13 @@ def process_audio_files(audio_paths: list[str], cleanup: bool = False) -> dict:
     Args:
         audio_paths: List of paths to audio files on disk.
         cleanup: If True, remove temp files after processing.
+        work_dir: Base temp directory for this job. Use a unique path per
+            job (e.g. "temp_audio/{job_id}") to avoid collisions.
 
     Returns:
         Same dict format as process_upload.
     """
-    temp_dir = "temp_audio"
+    temp_dir = work_dir
     convert_dir = os.path.join(temp_dir, "converted")
     chunks_dir = os.path.join(temp_dir, "chunks")
 
@@ -482,7 +484,7 @@ def cleanup_temp_dir(temp_dir: str = "temp_audio") -> None:
         logger.warning(f"Failed to clean up temp directory {temp_dir}: {cleanup_err}")
 
 
-def process_upload(zip_path: str, cleanup: bool = False) -> dict:
+def process_upload(zip_path: str, cleanup: bool = False, work_dir: str = "temp_audio") -> dict:
     """Main orchestrator: unzip, convert to mp3, and chunk audio.
 
     Args:
@@ -490,6 +492,8 @@ def process_upload(zip_path: str, cleanup: bool = False) -> dict:
         cleanup: If True, remove temp files after processing. Set to False
             (default) when chunk files need to survive for a later
             transcription step. Call cleanup_temp_dir() manually when done.
+        work_dir: Base temp directory for this job. Use a unique path per
+            job (e.g. "temp_audio/{job_id}") to avoid collisions.
 
     Returns:
         Dict with:
@@ -500,7 +504,7 @@ def process_upload(zip_path: str, cleanup: bool = False) -> dict:
             skipped_files: List of non-audio file names.
             estimated_cost: Estimated Whisper API cost.
     """
-    temp_dir = "temp_audio"
+    temp_dir = work_dir
     convert_dir = os.path.join(temp_dir, "converted")
     chunks_dir = os.path.join(temp_dir, "chunks")
 

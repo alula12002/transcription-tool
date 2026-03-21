@@ -109,7 +109,7 @@ async def upload_zip(file: UploadFile = File(...)) -> UploadResponse:
     try:
         from core.chunker import process_upload
 
-        result = process_upload(tmp_path, cleanup=False)
+        result = process_upload(tmp_path, cleanup=False, work_dir=os.path.join("temp_audio", job.job_id))
         job_store.update(
             job.job_id,
             status=JobStatus.completed,
@@ -149,7 +149,8 @@ async def upload_audio(files: list[UploadFile] = File(...)) -> UploadResponse:
     """
     job = job_store.create()
 
-    staging_dir = os.path.join("temp_audio", "staged", job.job_id)
+    job_work_dir = os.path.join("temp_audio", job.job_id)
+    staging_dir = os.path.join(job_work_dir, "staged")
     os.makedirs(staging_dir, exist_ok=True)
 
     try:
@@ -166,7 +167,7 @@ async def upload_audio(files: list[UploadFile] = File(...)) -> UploadResponse:
         logger.info("Starting audio processing for job %s", job.job_id)
         from core.chunker import process_audio_files
 
-        result = process_audio_files(staged_paths, cleanup=False)
+        result = process_audio_files(staged_paths, cleanup=False, work_dir=job_work_dir)
         logger.info("Audio processing complete: %d chunks, %.1f seconds",
                      result["num_chunks"], result["total_duration_seconds"])
         job_store.update(
@@ -230,7 +231,8 @@ def start_transcription(req: TranscribeRequest) -> TranscribeResponse:
             )
 
             from core.chunker import cleanup_temp_dir
-            cleanup_temp_dir()
+            job_temp_dir = os.path.join("temp_audio", req.job_id)
+            cleanup_temp_dir(job_temp_dir)
 
             job_store.update(
                 req.job_id,
