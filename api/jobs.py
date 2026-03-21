@@ -7,6 +7,7 @@ that implements the same interface.
 
 from __future__ import annotations
 
+import threading
 import uuid
 from abc import ABC, abstractmethod
 from typing import Optional
@@ -47,30 +48,39 @@ class InMemoryJobStore(JobStore):
 
     Jobs are lost when the server restarts. Replace with a persistent
     implementation (Supabase, Redis, Postgres) for production.
+
+    Thread-safe: all operations are protected by a lock to prevent
+    race conditions when background threads update job state while
+    the main thread reads it.
     """
 
     def __init__(self) -> None:
         self._jobs: dict[str, JobDetail] = {}
+        self._lock = threading.Lock()
 
     def create(self) -> JobDetail:
         job_id = uuid.uuid4().hex[:12]
         job = JobDetail(job_id=job_id, status=JobStatus.pending)
-        self._jobs[job_id] = job
+        with self._lock:
+            self._jobs[job_id] = job
         return job
 
     def get(self, job_id: str) -> Optional[JobDetail]:
-        return self._jobs.get(job_id)
+        with self._lock:
+            return self._jobs.get(job_id)
 
     def update(self, job_id: str, **kwargs) -> JobDetail:
-        job = self._jobs.get(job_id)
-        if job is None:
-            raise KeyError(f"Job {job_id} not found")
-        updated = job.model_copy(update=kwargs)
-        self._jobs[job_id] = updated
-        return updated
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if job is None:
+                raise KeyError(f"Job {job_id} not found")
+            updated = job.model_copy(update=kwargs)
+            self._jobs[job_id] = updated
+            return updated
 
     def delete(self, job_id: str) -> bool:
-        return self._jobs.pop(job_id, None) is not None
+        with self._lock:
+            return self._jobs.pop(job_id, None) is not None
 
 
 # Default store instance — swap this for production
