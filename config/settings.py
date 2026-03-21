@@ -12,7 +12,7 @@ load_dotenv()
 WHISPER_MODEL = "whisper-1"
 WHISPER_COST_PER_MINUTE = 0.006
 
-# Anthropic Claude settings
+# Anthropic Claude settings (pricing as of March 2025 — verify at https://docs.anthropic.com/en/docs/about-claude/models)
 CLAUDE_MODEL = "claude-sonnet-4-20250514"
 CLAUDE_COST_PER_INPUT_TOKEN = 3.00 / 1_000_000   # $3.00 per 1M input tokens
 CLAUDE_COST_PER_OUTPUT_TOKEN = 15.00 / 1_000_000  # $15.00 per 1M output tokens

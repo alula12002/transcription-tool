@@ -63,13 +63,13 @@ Get keys from:
 
 ### 4. Run the app
 
-**Option A — Streamlit UI** (standalone, local use):
+**Option A — Streamlit UI** (standalone, local use — legacy):
 ```bash
 python3 -m streamlit run app.py
 ```
-Opens at http://localhost:8501. Has a 200MB upload limit (Streamlit default).
+Opens at http://localhost:8501. Has a 200MB upload limit (Streamlit default). Note: The Streamlit UI (`app.py`) is the original interface, now superseded by the Next.js web app for production use. It's still functional for local testing.
 
-**Option B — FastAPI backend** (for custom frontends):
+**Option B — FastAPI backend + Next.js frontend** (production):
 ```bash
 python3 -m uvicorn api.main:app --reload
 ```
