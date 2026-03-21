@@ -60,7 +60,8 @@ export async function getJobStatus(jobId: string): Promise<JobDetail> {
 export async function startRefinement(
   jobId: string,
   mode: RefinementMode = "structured_prose",
-  userInstructions?: string
+  userInstructions?: string,
+  parallel = false
 ): Promise<void> {
   const res = await fetch(`${API_URL}/refine`, {
     method: "POST",
@@ -69,6 +70,7 @@ export async function startRefinement(
       job_id: jobId,
       mode,
       user_instructions: userInstructions ?? null,
+      parallel,
     }),
   });
   if (!res.ok) {

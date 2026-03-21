@@ -9,9 +9,12 @@ Anthropic client is created on first use and reused for all calls.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import os
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Callable, Optional
@@ -38,6 +41,38 @@ _client = None
 
 # Directory containing prompt template files
 _PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"
+
+# Cache directory for refined sections (resumability)
+_CACHE_DIR = Path(__file__).resolve().parent.parent / "temp_audio" / "refine_cache"
+
+
+def _section_cache_key(section_text: str, mode: str, user_instructions: Optional[str]) -> str:
+    """Generate a unique cache key for a section + mode + instructions combo."""
+    content = f"{mode}|{user_instructions or ''}|{section_text}"
+    return hashlib.sha256(content.encode()).hexdigest()[:16]
+
+
+def _get_cached_section(cache_key: str) -> Optional[dict]:
+    """Load a cached refined section if it exists."""
+    cache_file = _CACHE_DIR / f"{cache_key}.json"
+    if cache_file.exists():
+        try:
+            data = json.loads(cache_file.read_text(encoding="utf-8"))
+            logger.info(f"Cache hit for section {cache_key}")
+            return data
+        except (json.JSONDecodeError, OSError):
+            return None
+    return None
+
+
+def _save_section_cache(cache_key: str, result: dict) -> None:
+    """Save a refined section to cache."""
+    _CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    cache_file = _CACHE_DIR / f"{cache_key}.json"
+    try:
+        cache_file.write_text(json.dumps(result), encoding="utf-8")
+    except OSError as e:
+        logger.warning(f"Failed to cache section {cache_key}: {e}")
 
 
 def _get_client():
@@ -305,8 +340,51 @@ def estimate_refinement_cost(raw_text: str, mode: str = "structured_prose") -> d
     }
 
 
+def _refine_single_section(
+    index: int,
+    section: str,
+    system_prompt: str,
+    mode: str,
+    user_instructions: Optional[str],
+    _client_override=None,
+) -> tuple[int, dict, str]:
+    """Refine a single section. Used by both sequential and parallel modes.
+
+    Returns:
+        Tuple of (index, api_result_dict, cache_key).
+    """
+    cache_key = _section_cache_key(section, mode, user_instructions)
+
+    # Check cache first (resumability)
+    cached = _get_cached_section(cache_key)
+    if cached:
+        return (index, cached, cache_key)
+
+    # Build user message
+    user_message = section
+    if user_instructions:
+        user_message += f"\n\nAdditional context from the user: {user_instructions}"
+
+    # Scale max_tokens based on section length
+    estimated_output_tokens = len(section) // 3
+    max_tokens = max(4096, min(estimated_output_tokens, 16000))
+
+    result = _call_claude(
+        system_prompt,
+        user_message,
+        max_tokens=max_tokens,
+        _client_override=_client_override,
+    )
+
+    # Cache the result for resumability
+    _save_section_cache(cache_key, result)
+
+    return (index, result, cache_key)
+
+
 def refine_transcript(raw_text: str, mode: str, user_instructions: Optional[str] = None,
                       progress_callback: Optional[Callable] = None,
+                      parallel: bool = False, max_workers: int = 4,
                       _client_override=None) -> dict:
     """Refine a raw transcript using Claude with the selected mode.
 
@@ -316,6 +394,9 @@ def refine_transcript(raw_text: str, mode: str, user_instructions: Optional[str]
         user_instructions: Optional additional context from the user
             (e.g. names, places, dates) appended to the transcript.
         progress_callback: Optional fn(current_section, total_sections) for UI.
+        parallel: If True, process all sections concurrently (faster but
+            section transitions may be less smooth).
+        max_workers: Max concurrent API calls when parallel=True.
         _client_override: Optional Anthropic client for testing.
 
     Returns:
@@ -333,47 +414,65 @@ def refine_transcript(raw_text: str, mode: str, user_instructions: Optional[str]
     total_sections = len(sections)
 
     logger.info(
-        f"Refining transcript: mode={mode}, "
+        f"Refining transcript: mode={mode}, parallel={parallel}, "
         f"{total_sections} section(s), {len(raw_text)} chars"
     )
 
-    refined_parts = []
     total_input_tokens = 0
     total_output_tokens = 0
 
-    for i, section in enumerate(sections):
-        # Build user message
-        user_message = section
-        if user_instructions:
-            user_message += f"\n\nAdditional context from the user: {user_instructions}"
+    # Collect results indexed by section position
+    results_by_index: dict[int, dict] = {}
+    completed = 0
 
-        # Scale max_tokens based on section length — refinement output
-        # can be similar length to input (especially raw_cleanup mode).
-        # ~3 chars per token is a generous estimate for English text.
-        estimated_output_tokens = len(section) // 3
-        max_tokens = max(4096, min(estimated_output_tokens, 16000))
+    if parallel and total_sections > 1:
+        # --- Parallel mode: all sections at once ---
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {
+                executor.submit(
+                    _refine_single_section,
+                    i, section, system_prompt, mode, user_instructions,
+                    _client_override,
+                ): i
+                for i, section in enumerate(sections)
+            }
 
-        result = _call_claude(
-            system_prompt,
-            user_message,
-            max_tokens=max_tokens,
-            _client_override=_client_override,
-        )
+            for future in as_completed(futures):
+                idx, result, cache_key = future.result()
+                results_by_index[idx] = result
+                completed += 1
+                total_input_tokens += result["input_tokens"]
+                total_output_tokens += result["output_tokens"]
+                logger.info(f"Section {idx + 1}/{total_sections} refined (parallel)")
 
-        refined_text = result["text"]
-        total_input_tokens += result["input_tokens"]
-        total_output_tokens += result["output_tokens"]
+                if progress_callback:
+                    progress_callback(completed, total_sections)
+    else:
+        # --- Sequential mode: one at a time ---
+        for i, section in enumerate(sections):
+            idx, result, cache_key = _refine_single_section(
+                i, section, system_prompt, mode, user_instructions,
+                _client_override,
+            )
+            results_by_index[idx] = result
+            completed += 1
+            total_input_tokens += result["input_tokens"]
+            total_output_tokens += result["output_tokens"]
+            logger.info(f"Section {i + 1}/{total_sections} refined")
+
+            if progress_callback:
+                progress_callback(completed, total_sections)
+
+    # Reassemble in order and deduplicate overlaps
+    refined_parts = []
+    for i in range(total_sections):
+        refined_text = results_by_index[i]["text"]
 
         # Deduplicate overlap with previous section's output
         if refined_parts and total_sections > 1:
             refined_text = _deduplicate_overlap(refined_parts[-1], refined_text)
 
         refined_parts.append(refined_text)
-
-        if progress_callback:
-            progress_callback(i + 1, total_sections)
-
-        logger.info(f"Section {i + 1}/{total_sections} refined")
 
     final_text = "\n\n".join(refined_parts)
 

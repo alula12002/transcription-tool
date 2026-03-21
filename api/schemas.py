@@ -58,6 +58,7 @@ class RefineRequest(BaseModel):
     job_id: str
     mode: RefinementMode = RefinementMode.structured_prose
     user_instructions: Optional[str] = None
+    parallel: bool = False
 
 
 class RefineResponse(BaseModel):

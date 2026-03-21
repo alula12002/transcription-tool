@@ -35,6 +35,7 @@ export default function RefineStep({
 }) {
   const [mode, setMode] = useState<RefinementMode>("structured_prose");
   const [userInstructions, setUserInstructions] = useState("");
+  const [parallel, setParallel] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -80,7 +81,8 @@ export default function RefineStep({
       await startRefinement(
         jobId,
         mode,
-        userInstructions.trim() || undefined
+        userInstructions.trim() || undefined,
+        parallel
       );
       onJobUpdate({
         ...job!,
@@ -183,6 +185,22 @@ export default function RefineStep({
               className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
             />
           </div>
+
+          {/* Speed toggle */}
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={parallel}
+              onChange={(e) => setParallel(e.target.checked)}
+              className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+            />
+            <span className="text-sm font-medium text-gray-700">
+              ⚡ Fast mode
+            </span>
+            <span className="text-xs text-gray-400">
+              (parallel processing — faster, but section transitions may be less smooth)
+            </span>
+          </label>
 
           {/* Refine button */}
           <button

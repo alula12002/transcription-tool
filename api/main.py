@@ -284,6 +284,7 @@ def start_refinement(req: RefineRequest) -> RefineResponse:
                 mode=req.mode.value,
                 user_instructions=req.user_instructions,
                 progress_callback=_progress,
+                parallel=req.parallel,
             )
 
             job_store.update(
