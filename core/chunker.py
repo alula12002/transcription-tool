@@ -202,8 +202,32 @@ def process_zip(zip_path: str, work_dir: str = "temp_audio") -> tuple[list[str],
     return extracted_files, skipped_files
 
 
+def _is_mp3(audio_path: str) -> bool:
+    """Check if a file is already an mp3 by extension and ffprobe validation."""
+    if Path(audio_path).suffix.lower() != ".mp3":
+        return False
+    # Quick ffprobe check to confirm it's a valid mp3
+    try:
+        ffprobe = _get_ffprobe_path()
+        cmd = [
+            ffprobe, "-v", "quiet",
+            "-print_format", "json",
+            "-show_format",
+            str(audio_path),
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        info = json.loads(result.stdout)
+        fmt = info.get("format", {}).get("format_name", "")
+        return "mp3" in fmt
+    except Exception:
+        return False
+
+
 def convert_to_mp3(audio_path: str, output_dir: str) -> str:
     """Convert an audio file to mp3 (mono, at configured bitrate).
+
+    Skips conversion entirely if the file is already mp3 — just copies it
+    to the output directory. This saves significant time for mp3 uploads.
 
     Uses ffmpeg subprocess for conversion to avoid loading the entire file
     into memory (pydub decompresses to raw PCM which can use hundreds of MB).
@@ -215,14 +239,19 @@ def convert_to_mp3(audio_path: str, output_dir: str) -> str:
     Returns:
         Path to the output mp3 file.
     """
-    ffmpeg = _get_ffmpeg_path()
-
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
 
     input_name = Path(audio_path).stem
     output_file = output_path / f"{input_name}.mp3"
 
+    # Skip re-encoding if already mp3 — just copy
+    if _is_mp3(audio_path):
+        shutil.copy2(audio_path, output_file)
+        logger.info(f"Already mp3, copied without re-encoding: {output_file}")
+        return str(output_file)
+
+    ffmpeg = _get_ffmpeg_path()
     cmd = [
         ffmpeg, "-y",
         "-i", str(audio_path),

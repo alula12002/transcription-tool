@@ -21,6 +21,7 @@ export default function TranscribeStep({
   onJobUpdate: (job: JobDetail) => void;
 }) {
   const [error, setError] = useState<string | null>(null);
+  const [parallel, setParallel] = useState(false);
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const isTranscribing =
@@ -63,7 +64,7 @@ export default function TranscribeStep({
   const handleTranscribe = useCallback(async () => {
     setError(null);
     try {
-      await startTranscription(jobId);
+      await startTranscription(jobId, "en", parallel);
       // Immediately set a processing state so UI updates
       onJobUpdate({
         job_id: jobId,
@@ -89,7 +90,7 @@ export default function TranscribeStep({
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to start transcription");
     }
-  }, [jobId, numChunks, onJobUpdate, startPolling]);
+  }, [jobId, numChunks, parallel, onJobUpdate, startPolling]);
 
   if (isDone) {
     return (
@@ -142,6 +143,20 @@ export default function TranscribeStep({
 
   return (
     <div>
+      {enabled && (
+        <label className="flex items-center gap-2 mb-3 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={parallel}
+            onChange={(e) => setParallel(e.target.checked)}
+            className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+          />
+          <span className="text-sm text-gray-700">Fast mode</span>
+          <span className="text-xs text-gray-400">
+            (parallel — faster, but may inconsistently spell names across chunks)
+          </span>
+        </label>
+      )}
       <button
         disabled={!enabled}
         onClick={handleTranscribe}
