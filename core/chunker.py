@@ -315,11 +315,13 @@ def chunk_audio(mp3_path: str, max_duration_ms: int, output_dir: str) -> tuple[l
     # Get duration without loading audio data
     duration_ms = _get_duration_ms(mp3_path)
 
-    # If already under limit, just copy the file — no re-encoding needed
+    # If already under limit, move the file (no re-encoding, no extra copy).
+    # The caller deletes the source after chunking anyway, so moving is safe
+    # and avoids a redundant copy for files that are already mp3.
     if duration_ms <= max_duration_ms:
         chunk_file = output_path / f"{original_name}_chunk_001.mp3"
-        shutil.copy2(mp3_path, chunk_file)
-        logger.info(f"Audio under size limit, copied as single chunk: {chunk_file}")
+        shutil.move(str(mp3_path), str(chunk_file))
+        logger.info(f"Audio under size limit, moved as single chunk: {chunk_file}")
         return [str(chunk_file)], duration_ms
 
     # Split into chunks using ffmpeg + windowed silence detection
