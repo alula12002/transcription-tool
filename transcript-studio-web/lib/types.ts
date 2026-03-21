@@ -14,6 +14,22 @@ export interface UploadResponse {
   skipped_files: string[];
 }
 
+/**
+ * Build an UploadResponse from a completed JobDetail.
+ * Used after async upload processing finishes.
+ */
+export function uploadResponseFromJob(job: JobDetail): UploadResponse {
+  return {
+    job_id: job.job_id,
+    status: job.status,
+    num_files_found: job.num_files_found,
+    num_chunks: job.num_chunks,
+    total_duration_seconds: job.total_duration_seconds,
+    estimated_cost: job.upload_cost_estimate,
+    skipped_files: job.skipped_files,
+  };
+}
+
 export interface JobDetail {
   job_id: string;
   status: JobStatus;

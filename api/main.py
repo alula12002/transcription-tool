@@ -10,9 +10,7 @@ from __future__ import annotations
 
 import logging
 import os
-import tempfile
 import threading
-from pathlib import Path
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, UploadFile, File
@@ -92,60 +90,64 @@ def health_check() -> dict:
 async def upload_zip(file: UploadFile = File(...)) -> UploadResponse:
     """Upload a zip file containing audio recordings.
 
-    Extracts audio, converts to mp3, and chunks for transcription.
-    Returns job ID and upload summary.
+    Saves the file to disk immediately, then processes (extract, convert,
+    chunk) in a background thread. Poll GET /jobs/{job_id} for progress.
     """
     if not file.filename or not file.filename.lower().endswith(".zip"):
         raise HTTPException(status_code=400, detail="File must be a .zip")
 
     job = job_store.create()
+    job_work_dir = os.path.join("temp_audio", job.job_id)
+    os.makedirs(job_work_dir, exist_ok=True)
 
-    # Write upload to temp file
-    with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tmp:
-        content = await file.read()
-        tmp.write(content)
-        tmp_path = tmp.name
+    # Save the uploaded file to disk (fast — just writing bytes)
+    tmp_path = os.path.join(job_work_dir, "upload.zip")
+    with open(tmp_path, "wb") as out:
+        while chunk := await file.read(1024 * 1024):  # 1MB at a time
+            out.write(chunk)
 
-    try:
-        from core.chunker import process_upload
+    job_store.update(job.job_id, status=JobStatus.processing, step="upload", progress=0.0)
 
-        result = process_upload(tmp_path, cleanup=False, work_dir=os.path.join("temp_audio", job.job_id))
-        job_store.update(
-            job.job_id,
-            status=JobStatus.completed,
-            step="upload",
-            progress=1.0,
-            num_files_found=result["num_files_found"],
-            num_chunks=result["num_chunks"],
-            total_duration_seconds=result["total_duration_seconds"],
-            upload_cost_estimate=result["estimated_cost"],
-            skipped_files=result["skipped_files"],
-            chunk_paths=result["chunk_paths"],
-        )
+    def _process_zip():
+        try:
+            from core.chunker import process_upload
 
-        return UploadResponse(
-            job_id=job.job_id,
-            status=JobStatus.completed,
-            num_files_found=result["num_files_found"],
-            num_chunks=result["num_chunks"],
-            total_duration_seconds=result["total_duration_seconds"],
-            estimated_cost=result["estimated_cost"],
-            skipped_files=result["skipped_files"],
-        )
+            result = process_upload(tmp_path, cleanup=False, work_dir=job_work_dir)
+            job_store.update(
+                job.job_id,
+                status=JobStatus.completed,
+                step="upload",
+                progress=1.0,
+                num_files_found=result["num_files_found"],
+                num_chunks=result["num_chunks"],
+                total_duration_seconds=result["total_duration_seconds"],
+                upload_cost_estimate=result["estimated_cost"],
+                skipped_files=result["skipped_files"],
+                chunk_paths=result["chunk_paths"],
+            )
+        except Exception as e:
+            logger.error(f"Upload processing failed for job {job.job_id}: {e}")
+            job_store.update(job.job_id, status=JobStatus.failed, error=str(e))
+        finally:
+            # Clean up the zip file (chunks are kept for transcription)
+            if os.path.exists(tmp_path):
+                os.unlink(tmp_path)
 
-    except Exception as e:
-        job_store.update(job.job_id, status=JobStatus.failed, error=str(e))
-        raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        if os.path.exists(tmp_path):
-            os.unlink(tmp_path)
+    thread = threading.Thread(target=_process_zip, daemon=True)
+    thread.start()
+
+    return UploadResponse(
+        job_id=job.job_id,
+        status=JobStatus.processing,
+    )
 
 
 @app.post("/upload/audio", response_model=UploadResponse)
 async def upload_audio(files: list[UploadFile] = File(...)) -> UploadResponse:
     """Upload individual audio files for transcription.
 
-    Accepts one or more audio files. Converts and chunks them.
+    Saves files to disk immediately, then processes (convert, chunk)
+    in a background thread. Poll GET /jobs/{job_id} for progress.
     """
     job = job_store.create()
 
@@ -153,49 +155,50 @@ async def upload_audio(files: list[UploadFile] = File(...)) -> UploadResponse:
     staging_dir = os.path.join(job_work_dir, "staged")
     os.makedirs(staging_dir, exist_ok=True)
 
-    try:
-        staged_paths = []
-        for f in files:
-            dest = os.path.join(staging_dir, f.filename or "audio.mp3")
-            logger.info("Saving uploaded file %s to %s", f.filename, dest)
-            with open(dest, "wb") as out:
-                while chunk := await f.read(1024 * 1024):  # 1MB chunks
-                    out.write(chunk)
-            staged_paths.append(dest)
-            logger.info("Saved %s (%.1f MB)", dest, os.path.getsize(dest) / 1024 / 1024)
+    # Save all uploaded files to disk (fast — just writing bytes)
+    staged_paths = []
+    for f in files:
+        dest = os.path.join(staging_dir, f.filename or "audio.mp3")
+        logger.info("Saving uploaded file %s to %s", f.filename, dest)
+        with open(dest, "wb") as out:
+            while chunk := await f.read(1024 * 1024):  # 1MB at a time
+                out.write(chunk)
+        staged_paths.append(dest)
+        logger.info("Saved %s (%.1f MB)", dest, os.path.getsize(dest) / 1024 / 1024)
 
-        logger.info("Starting audio processing for job %s", job.job_id)
-        from core.chunker import process_audio_files
+    job_store.update(job.job_id, status=JobStatus.processing, step="upload", progress=0.0)
 
-        result = process_audio_files(staged_paths, cleanup=False, work_dir=job_work_dir)
-        logger.info("Audio processing complete: %d chunks, %.1f seconds",
-                     result["num_chunks"], result["total_duration_seconds"])
-        job_store.update(
-            job.job_id,
-            status=JobStatus.completed,
-            step="upload",
-            progress=1.0,
-            num_files_found=result["num_files_found"],
-            num_chunks=result["num_chunks"],
-            total_duration_seconds=result["total_duration_seconds"],
-            upload_cost_estimate=result["estimated_cost"],
-            skipped_files=result["skipped_files"],
-            chunk_paths=result["chunk_paths"],
-        )
+    def _process_audio():
+        try:
+            from core.chunker import process_audio_files
 
-        return UploadResponse(
-            job_id=job.job_id,
-            status=JobStatus.completed,
-            num_files_found=result["num_files_found"],
-            num_chunks=result["num_chunks"],
-            total_duration_seconds=result["total_duration_seconds"],
-            estimated_cost=result["estimated_cost"],
-            skipped_files=result["skipped_files"],
-        )
+            logger.info("Starting audio processing for job %s", job.job_id)
+            result = process_audio_files(staged_paths, cleanup=False, work_dir=job_work_dir)
+            logger.info("Audio processing complete: %d chunks, %.1f seconds",
+                         result["num_chunks"], result["total_duration_seconds"])
+            job_store.update(
+                job.job_id,
+                status=JobStatus.completed,
+                step="upload",
+                progress=1.0,
+                num_files_found=result["num_files_found"],
+                num_chunks=result["num_chunks"],
+                total_duration_seconds=result["total_duration_seconds"],
+                upload_cost_estimate=result["estimated_cost"],
+                skipped_files=result["skipped_files"],
+                chunk_paths=result["chunk_paths"],
+            )
+        except Exception as e:
+            logger.error(f"Upload processing failed for job {job.job_id}: {e}")
+            job_store.update(job.job_id, status=JobStatus.failed, error=str(e))
 
-    except Exception as e:
-        job_store.update(job.job_id, status=JobStatus.failed, error=str(e))
-        raise HTTPException(status_code=500, detail=str(e))
+    thread = threading.Thread(target=_process_audio, daemon=True)
+    thread.start()
+
+    return UploadResponse(
+        job_id=job.job_id,
+        status=JobStatus.processing,
+    )
 
 
 # --- Transcribe ---

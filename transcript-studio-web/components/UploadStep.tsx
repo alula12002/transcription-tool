@@ -1,11 +1,14 @@
 "use client";
 
-import { useCallback, useRef, useState } from "react";
-import { uploadZip, uploadAudio } from "@/lib/api";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { uploadZip, uploadAudio, getJobStatus } from "@/lib/api";
 import type { UploadResponse } from "@/lib/types";
+import { uploadResponseFromJob } from "@/lib/types";
+import ProgressBar from "./ProgressBar";
 
-const AUDIO_EXTENSIONS = [".mp3", ".wav", ".m4a", ".ogg", ".flac"];
+const AUDIO_EXTENSIONS = [".mp3", ".wav", ".m4a", ".ogg", ".flac", ".webm", ".aac"];
 const ALL_EXTENSIONS = [".zip", ...AUDIO_EXTENSIONS];
+const POLL_INTERVAL = 2000;
 
 function isZip(file: File) {
   return file.name.toLowerCase().endsWith(".zip");
@@ -21,12 +24,6 @@ function formatDuration(seconds: number) {
   return m > 0 ? `${m}m ${s}s` : `${s}s`;
 }
 
-function formatSize(bytes: number) {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
-
 export default function UploadStep({
   onUploadComplete,
   uploadData,
@@ -36,9 +33,56 @@ export default function UploadStep({
 }) {
   const [dragging, setDragging] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [processing, setProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [fileName, setFileName] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const stopPolling = useCallback(() => {
+    if (pollingRef.current) {
+      clearInterval(pollingRef.current);
+      pollingRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => {
+    return stopPolling;
+  }, [stopPolling]);
+
+  const pollForCompletion = useCallback(
+    (jobId: string, displayName: string) => {
+      stopPolling();
+      setProcessing(true);
+
+      pollingRef.current = setInterval(async () => {
+        try {
+          const job = await getJobStatus(jobId);
+
+          if (job.status === "completed") {
+            stopPolling();
+            setProcessing(false);
+            setUploading(false);
+            const result = uploadResponseFromJob(job);
+            setFileName(displayName);
+            onUploadComplete(result, displayName);
+          } else if (job.status === "failed") {
+            stopPolling();
+            setProcessing(false);
+            setUploading(false);
+            setError(job.error || "Upload processing failed");
+          }
+          // If still "processing", keep polling
+        } catch {
+          stopPolling();
+          setProcessing(false);
+          setUploading(false);
+          setError("Lost connection to server");
+        }
+      }, POLL_INTERVAL);
+    },
+    [onUploadComplete, stopPolling]
+  );
 
   const handleFiles = useCallback(
     async (files: FileList | File[]) => {
@@ -60,12 +104,12 @@ export default function UploadStep({
       setUploading(true);
 
       try {
-        let result: UploadResponse;
+        let response: { job_id: string; status: string };
         let displayName: string;
 
         if (fileArray.length === 1 && isZip(fileArray[0])) {
           displayName = fileArray[0].name;
-          result = await uploadZip(fileArray[0]);
+          response = await uploadZip(fileArray[0]);
         } else {
           const audioFiles = fileArray.filter(isAudio);
           if (audioFiles.length === 0) {
@@ -77,18 +121,27 @@ export default function UploadStep({
             audioFiles.length === 1
               ? audioFiles[0].name
               : `${audioFiles.length} audio files`;
-          result = await uploadAudio(audioFiles);
+          response = await uploadAudio(audioFiles);
         }
 
-        setFileName(displayName);
-        onUploadComplete(result, displayName);
+        // Backend now returns immediately with status "processing".
+        // Start polling for completion.
+        if (response.status === "completed") {
+          // Backwards compatibility: if the server returned full results
+          // synchronously (e.g. local dev), use them directly.
+          setFileName(displayName);
+          setUploading(false);
+          onUploadComplete(response as UploadResponse, displayName);
+        } else {
+          // Async mode: poll until processing is done.
+          pollForCompletion(response.job_id, displayName);
+        }
       } catch (err) {
         setError(err instanceof Error ? err.message : "Upload failed");
-      } finally {
         setUploading(false);
       }
     },
-    [onUploadComplete]
+    [onUploadComplete, pollForCompletion]
   );
 
   const handleDrop = useCallback(
@@ -151,60 +204,73 @@ export default function UploadStep({
 
   return (
     <div>
-      <div
-        onDragOver={(e) => {
-          e.preventDefault();
-          setDragging(true);
-        }}
-        onDragLeave={() => setDragging(false)}
-        onDrop={handleDrop}
-        onClick={() => inputRef.current?.click()}
-        className={`border-2 border-dashed rounded-lg p-8 text-center transition-colors cursor-pointer
-          ${dragging ? "border-blue-400 bg-blue-50" : "border-gray-300 hover:border-gray-400"}`}
-      >
-        {uploading ? (
-          <div className="flex flex-col items-center">
-            <div className="h-10 w-10 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin mb-3" />
-            <p className="text-sm font-medium text-gray-700">
-              Uploading and processing...
-            </p>
-          </div>
-        ) : (
-          <>
-            <svg
-              className="mx-auto h-10 w-10 text-gray-400 mb-3"
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-              strokeWidth={1.5}
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5"
-              />
-            </svg>
-            <p className="text-sm font-medium text-gray-700">
-              {dragging
-                ? "Drop files here"
-                : "Drag and drop audio files or zip here"}
-            </p>
-            <p className="text-xs text-gray-400 mt-1">
-              Supports .zip, .mp3, .wav, .m4a, .ogg, .flac
-            </p>
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                inputRef.current?.click();
-              }}
-              className="mt-3 px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-md hover:bg-blue-700 transition-colors"
-            >
-              Browse Files
-            </button>
-          </>
-        )}
-      </div>
+      {/* Show progress while server processes audio */}
+      {processing ? (
+        <div className="border border-blue-200 bg-blue-50 rounded-lg p-5">
+          <ProgressBar
+            progress={-1}
+            label="Processing audio (converting, chunking)..."
+          />
+          <p className="text-xs text-gray-500 mt-2">
+            File uploaded — server is preparing audio chunks
+          </p>
+        </div>
+      ) : (
+        <div
+          onDragOver={(e) => {
+            e.preventDefault();
+            setDragging(true);
+          }}
+          onDragLeave={() => setDragging(false)}
+          onDrop={handleDrop}
+          onClick={() => inputRef.current?.click()}
+          className={`border-2 border-dashed rounded-lg p-8 text-center transition-colors cursor-pointer
+            ${dragging ? "border-blue-400 bg-blue-50" : "border-gray-300 hover:border-gray-400"}`}
+        >
+          {uploading ? (
+            <div className="flex flex-col items-center">
+              <div className="h-10 w-10 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin mb-3" />
+              <p className="text-sm font-medium text-gray-700">
+                Uploading...
+              </p>
+            </div>
+          ) : (
+            <>
+              <svg
+                className="mx-auto h-10 w-10 text-gray-400 mb-3"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+                strokeWidth={1.5}
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5"
+                />
+              </svg>
+              <p className="text-sm font-medium text-gray-700">
+                {dragging
+                  ? "Drop files here"
+                  : "Drag and drop audio files or zip here"}
+              </p>
+              <p className="text-xs text-gray-400 mt-1">
+                Supports .zip, .mp3, .wav, .m4a, .ogg, .flac, .webm, .aac
+              </p>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  inputRef.current?.click();
+                }}
+                className="mt-3 px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-md hover:bg-blue-700 transition-colors"
+              >
+                Browse Files
+              </button>
+            </>
+          )}
+        </div>
+      )}
 
       <input
         ref={inputRef}
