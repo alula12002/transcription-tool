@@ -380,23 +380,36 @@ def process_audio_files(audio_paths: list[str], cleanup: bool = False) -> dict:
                 "estimated_cost": 0,
             }
 
-        # Convert to mp3
-        mp3_files = []
-        for audio_file in valid_files:
-            mp3_path = convert_to_mp3(audio_file, convert_dir)
-            mp3_files.append(mp3_path)
-
-        # Chunk audio
+        # Convert and chunk each file one at a time, cleaning up as we go
+        # to minimize disk usage for large uploads (1GB+ zips)
         bitrate_kbps = _parse_bitrate_kbps()
         max_duration_ms = calculate_max_chunk_duration(bitrate_kbps)
 
         all_chunks = []
         total_duration_ms = 0
 
-        for mp3_file in mp3_files:
-            chunks, file_duration_ms = chunk_audio(mp3_file, max_duration_ms, chunks_dir)
+        for audio_file in valid_files:
+            # Convert to mp3
+            mp3_path = convert_to_mp3(audio_file, convert_dir)
+
+            # Delete source file after conversion to save disk space
+            try:
+                Path(audio_file).unlink()
+                logger.info(f"Cleaned up source file: {audio_file}")
+            except OSError:
+                pass
+
+            # Chunk the mp3
+            chunks, file_duration_ms = chunk_audio(mp3_path, max_duration_ms, chunks_dir)
             all_chunks.extend(chunks)
             total_duration_ms += file_duration_ms
+
+            # Delete converted mp3 after chunking to save disk space
+            try:
+                Path(mp3_path).unlink()
+                logger.info(f"Cleaned up converted file: {mp3_path}")
+            except OSError:
+                pass
 
         total_duration_seconds = total_duration_ms / 1000
         total_duration_minutes = total_duration_seconds / 60
@@ -476,23 +489,36 @@ def process_upload(zip_path: str, cleanup: bool = False) -> dict:
                 "estimated_cost": 0,
             }
 
-        # Step 2: Convert to mp3
-        mp3_files = []
-        for audio_file in extracted_files:
-            mp3_path = convert_to_mp3(audio_file, convert_dir)
-            mp3_files.append(mp3_path)
-
-        # Step 3: Chunk audio (uses ffprobe for duration, no redundant loading)
+        # Step 2 & 3: Convert and chunk each file one at a time,
+        # cleaning up as we go to minimize disk usage for large zips (1GB+)
         bitrate_kbps = _parse_bitrate_kbps()
         max_duration_ms = calculate_max_chunk_duration(bitrate_kbps)
 
         all_chunks = []
         total_duration_ms = 0
 
-        for mp3_file in mp3_files:
-            chunks, file_duration_ms = chunk_audio(mp3_file, max_duration_ms, chunks_dir)
+        for audio_file in extracted_files:
+            # Convert to mp3
+            mp3_path = convert_to_mp3(audio_file, convert_dir)
+
+            # Delete extracted source file after conversion
+            try:
+                Path(audio_file).unlink()
+                logger.info(f"Cleaned up extracted file: {audio_file}")
+            except OSError:
+                pass
+
+            # Chunk the mp3
+            chunks, file_duration_ms = chunk_audio(mp3_path, max_duration_ms, chunks_dir)
             all_chunks.extend(chunks)
             total_duration_ms += file_duration_ms
+
+            # Delete converted mp3 after chunking
+            try:
+                Path(mp3_path).unlink()
+                logger.info(f"Cleaned up converted file: {mp3_path}")
+            except OSError:
+                pass
 
         total_duration_seconds = total_duration_ms / 1000
         total_duration_minutes = total_duration_seconds / 60
