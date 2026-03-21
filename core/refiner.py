@@ -365,9 +365,16 @@ def _refine_single_section(
     if user_instructions:
         user_message += f"\n\nAdditional context from the user: {user_instructions}"
 
-    # Scale max_tokens based on section length
+    # Scale max_tokens based on section length and mode.
+    # Raw cleanup output ≈ same length as input, structured prose ≈ 80%,
+    # summary ≈ 12.5%. The ~3 chars/token estimate is conservative.
     estimated_output_tokens = len(section) // 3
-    max_tokens = max(4096, min(estimated_output_tokens, 16000))
+    if mode == "summary":
+        estimated_output_tokens = estimated_output_tokens // 4
+    elif mode == "structured_prose":
+        estimated_output_tokens = int(estimated_output_tokens * 0.85)
+    # Floor of 4096, cap of 32000 (well within Sonnet's 64K limit)
+    max_tokens = max(4096, min(estimated_output_tokens, 32000))
 
     result = _call_claude(
         system_prompt,
