@@ -12,7 +12,6 @@ import logging
 import os
 import threading
 
-from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import PlainTextResponse
@@ -32,7 +31,6 @@ from api.schemas import (
     UploadResponse,
 )
 
-load_dotenv()
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
 

@@ -20,7 +20,6 @@ from pathlib import Path
 from typing import Callable, Optional
 
 import anthropic
-from dotenv import load_dotenv
 
 from config.settings import (
     CLAUDE_MODEL,
@@ -32,9 +31,6 @@ from config.settings import (
 )
 
 logger = logging.getLogger(__name__)
-
-# Load .env once at import time
-load_dotenv()
 
 # Shared Anthropic client
 _client = None

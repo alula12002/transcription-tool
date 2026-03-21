@@ -27,15 +27,11 @@ from pathlib import Path
 from typing import Callable, Optional
 
 import openai
-from dotenv import load_dotenv
 
 from config.settings import WHISPER_MODEL, WHISPER_COST_PER_MINUTE
 from core.chunker import _get_duration_ms
 
 logger = logging.getLogger(__name__)
-
-# Load .env once at import time
-load_dotenv()
 
 # Create a single reusable client
 _client = None

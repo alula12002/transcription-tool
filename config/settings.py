@@ -1,4 +1,12 @@
-"""Application-wide constants and configuration settings."""
+"""Application-wide constants and configuration settings.
+
+Environment variables are loaded here (once) so that any module
+importing from config.settings gets .env values automatically.
+"""
+
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # OpenAI Whisper settings
 WHISPER_MODEL = "whisper-1"
