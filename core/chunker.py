@@ -487,6 +487,9 @@ def cleanup_temp_dir(temp_dir: str = "temp_audio") -> None:
 def process_upload(zip_path: str, cleanup: bool = False, work_dir: str = "temp_audio") -> dict:
     """Main orchestrator: unzip, convert to mp3, and chunk audio.
 
+    Extracts audio files from the zip, then delegates to process_audio_files
+    for conversion and chunking.
+
     Args:
         zip_path: Path to the uploaded zip file.
         cleanup: If True, remove temp files after processing. Set to False
@@ -504,80 +507,24 @@ def process_upload(zip_path: str, cleanup: bool = False, work_dir: str = "temp_a
             skipped_files: List of non-audio file names.
             estimated_cost: Estimated Whisper API cost.
     """
-    temp_dir = work_dir
-    convert_dir = os.path.join(temp_dir, "converted")
-    chunks_dir = os.path.join(temp_dir, "chunks")
+    # Step 1: Extract audio files from zip
+    extracted_files, skipped_files = process_zip(zip_path, work_dir)
 
-    try:
-        # Step 1: Extract from zip
-        extracted_files, skipped_files = process_zip(zip_path, temp_dir)
-        if not extracted_files:
-            logger.warning("No audio files found in zip")
-            return {
-                "chunk_paths": [],
-                "total_duration_seconds": 0,
-                "num_chunks": 0,
-                "num_files_found": 0,
-                "skipped_files": skipped_files,
-                "estimated_cost": 0,
-            }
-
-        # Step 2 & 3: Convert and chunk each file one at a time,
-        # cleaning up as we go to minimize disk usage for large zips (1GB+)
-        bitrate_kbps = _parse_bitrate_kbps()
-        max_duration_ms = calculate_max_chunk_duration(bitrate_kbps)
-
-        all_chunks = []
-        total_duration_ms = 0
-
-        for audio_file in extracted_files:
-            # Convert to mp3
-            mp3_path = convert_to_mp3(audio_file, convert_dir)
-
-            # Delete extracted source file after conversion
-            try:
-                Path(audio_file).unlink()
-                logger.info(f"Cleaned up extracted file: {audio_file}")
-            except OSError:
-                pass
-
-            # Chunk the mp3
-            chunks, file_duration_ms = chunk_audio(mp3_path, max_duration_ms, chunks_dir)
-            all_chunks.extend(chunks)
-            total_duration_ms += file_duration_ms
-
-            # Delete converted mp3 after chunking
-            try:
-                Path(mp3_path).unlink()
-                logger.info(f"Cleaned up converted file: {mp3_path}")
-            except OSError:
-                pass
-
-        total_duration_seconds = total_duration_ms / 1000
-        total_duration_minutes = total_duration_seconds / 60
-        estimated_cost = total_duration_minutes * WHISPER_COST_PER_MINUTE
-
-        result = {
-            "chunk_paths": all_chunks,
-            "total_duration_seconds": round(total_duration_seconds, 2),
-            "num_chunks": len(all_chunks),
-            "num_files_found": len(extracted_files),
+    if not extracted_files:
+        logger.warning("No audio files found in zip")
+        return {
+            "chunk_paths": [],
+            "total_duration_seconds": 0,
+            "num_chunks": 0,
+            "num_files_found": 0,
             "skipped_files": skipped_files,
-            "estimated_cost": round(estimated_cost, 4),
+            "estimated_cost": 0,
         }
 
-        logger.info(
-            f"Processing complete: {len(all_chunks)} chunks, "
-            f"{total_duration_seconds:.2f}s total, ${estimated_cost:.4f} estimated"
-        )
+    # Step 2 & 3: Convert and chunk (delegated to shared function)
+    result = process_audio_files(extracted_files, cleanup=cleanup, work_dir=work_dir)
 
-        return result
+    # Merge in the skipped files from zip extraction
+    result["skipped_files"] = skipped_files + result.get("skipped_files", [])
 
-    except Exception as e:
-        logger.error(f"Error processing upload: {e}")
-        # Always cleanup on error so we don't leave partial state
-        cleanup_temp_dir(temp_dir)
-        raise
-    finally:
-        if cleanup:
-            cleanup_temp_dir(temp_dir)
+    return result
