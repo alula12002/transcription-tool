@@ -24,7 +24,7 @@ export default function ResultsStep({
   const [reRefineMode, setReRefineMode] = useState<RefinementMode>("structured_prose");
   const [reRefineInstructions, setReRefineInstructions] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pollingRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const isReRefining = job.step === "refine" && job.status === "processing";
 
@@ -33,7 +33,7 @@ export default function ResultsStep({
 
   const stopPolling = useCallback(() => {
     if (pollingRef.current) {
-      clearInterval(pollingRef.current);
+      clearTimeout(pollingRef.current);
       pollingRef.current = null;
     }
   }, []);
@@ -41,21 +41,24 @@ export default function ResultsStep({
   const startPolling = useCallback(
     (id: string) => {
       stopPolling();
-      pollingRef.current = setInterval(async () => {
+      const poll = async () => {
         try {
           const status = await getJobStatus(id);
           onJobUpdate(status);
           if (status.status === "completed" || status.status === "failed") {
-            stopPolling();
+            pollingRef.current = null;
             if (status.status === "failed") {
               setError(status.error || "Refinement failed");
             }
+          } else {
+            pollingRef.current = setTimeout(poll, POLL_INTERVAL);
           }
         } catch {
-          stopPolling();
+          pollingRef.current = null;
           setError("Lost connection to server");
         }
-      }, POLL_INTERVAL);
+      };
+      pollingRef.current = setTimeout(poll, POLL_INTERVAL);
     },
     [onJobUpdate, stopPolling]
   );
@@ -85,7 +88,6 @@ export default function ResultsStep({
         status: "processing",
         step: "refine",
         progress: 0,
-        refined_transcript: null,
       });
       startPolling(job.job_id);
     } catch (err) {

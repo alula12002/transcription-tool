@@ -37,14 +37,14 @@ export default function RefineStep({
   const [userInstructions, setUserInstructions] = useState("");
   const [parallel, setParallel] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pollingRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const isRefining = job?.step === "refine" && job?.status === "processing";
   const isDone = !!job?.refined_transcript;
 
   const stopPolling = useCallback(() => {
     if (pollingRef.current) {
-      clearInterval(pollingRef.current);
+      clearTimeout(pollingRef.current);
       pollingRef.current = null;
     }
   }, []);
@@ -52,21 +52,24 @@ export default function RefineStep({
   const startPolling = useCallback(
     (id: string) => {
       stopPolling();
-      pollingRef.current = setInterval(async () => {
+      const poll = async () => {
         try {
           const status = await getJobStatus(id);
           onJobUpdate(status);
           if (status.status === "completed" || status.status === "failed") {
-            stopPolling();
+            pollingRef.current = null;
             if (status.status === "failed") {
               setError(status.error || "Refinement failed");
             }
+          } else {
+            pollingRef.current = setTimeout(poll, POLL_INTERVAL);
           }
         } catch {
-          stopPolling();
+          pollingRef.current = null;
           setError("Lost connection to server");
         }
-      }, POLL_INTERVAL);
+      };
+      pollingRef.current = setTimeout(poll, POLL_INTERVAL);
     },
     [onJobUpdate, stopPolling]
   );
@@ -74,6 +77,14 @@ export default function RefineStep({
   useEffect(() => {
     return stopPolling;
   }, [stopPolling]);
+
+  // Safety net: if we should be polling but aren't (e.g. re-refine started
+  // from ResultsStep which then unmounted), start polling
+  useEffect(() => {
+    if (isRefining && !pollingRef.current && jobId) {
+      startPolling(jobId);
+    }
+  }, [isRefining, jobId, startPolling]);
 
   const handleRefine = useCallback(async () => {
     setError(null);

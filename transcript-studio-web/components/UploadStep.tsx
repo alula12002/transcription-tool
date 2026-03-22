@@ -37,11 +37,11 @@ export default function UploadStep({
   const [error, setError] = useState<string | null>(null);
   const [fileName, setFileName] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
-  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pollingRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const stopPolling = useCallback(() => {
     if (pollingRef.current) {
-      clearInterval(pollingRef.current);
+      clearTimeout(pollingRef.current);
       pollingRef.current = null;
     }
   }, []);
@@ -55,31 +55,33 @@ export default function UploadStep({
       stopPolling();
       setProcessing(true);
 
-      pollingRef.current = setInterval(async () => {
+      const poll = async () => {
         try {
           const job = await getJobStatus(jobId);
 
           if (job.status === "completed") {
-            stopPolling();
+            pollingRef.current = null;
             setProcessing(false);
             setUploading(false);
             const result = uploadResponseFromJob(job);
             setFileName(displayName);
             onUploadComplete(result, displayName);
           } else if (job.status === "failed") {
-            stopPolling();
+            pollingRef.current = null;
             setProcessing(false);
             setUploading(false);
             setError(job.error || "Upload processing failed");
+          } else {
+            pollingRef.current = setTimeout(poll, POLL_INTERVAL);
           }
-          // If still "processing", keep polling
         } catch {
-          stopPolling();
+          pollingRef.current = null;
           setProcessing(false);
           setUploading(false);
           setError("Lost connection to server");
         }
-      }, POLL_INTERVAL);
+      };
+      pollingRef.current = setTimeout(poll, POLL_INTERVAL);
     },
     [onUploadComplete, stopPolling]
   );
