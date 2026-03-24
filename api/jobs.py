@@ -1,15 +1,23 @@
 """Job store for tracking async processing jobs.
 
-This module provides an in-memory job store for local development.
-For production, swap InMemoryJobStore with a Supabase/Redis implementation
-that implements the same interface.
+This module provides an in-memory job store for local development and a
+file-backed store for production (e.g. a Railway persistent volume).
+
+Set the JOB_STORE_PATH environment variable to a directory path to enable
+the file-backed store. When unset, falls back to in-memory.
+
+Example (Railway):
+    JOB_STORE_PATH=/data/jobs
 """
 
 from __future__ import annotations
 
+import json
+import os
 import threading
 import uuid
 from abc import ABC, abstractmethod
+from pathlib import Path
 from typing import Optional
 
 from api.schemas import JobDetail, JobStatus
@@ -83,5 +91,71 @@ class InMemoryJobStore(JobStore):
             return self._jobs.pop(job_id, None) is not None
 
 
-# Default store instance — swap this for production
-job_store = InMemoryJobStore()
+class FileJobStore(JobStore):
+    """File-backed job store for production deployments.
+
+    Each job is stored as a JSON file under `directory`.  Survives server
+    restarts and redeploys as long as the directory is on a persistent volume.
+
+    Thread-safe: a per-job lock prevents torn writes when multiple background
+    threads update the same job simultaneously.
+    """
+
+    def __init__(self, directory: str | Path) -> None:
+        self._dir = Path(directory)
+        self._dir.mkdir(parents=True, exist_ok=True)
+        self._lock = threading.Lock()  # guards file enumeration / creation
+
+    def _path(self, job_id: str) -> Path:
+        return self._dir / f"{job_id}.json"
+
+    def _write(self, job: JobDetail) -> None:
+        tmp = self._path(job.job_id).with_suffix(".tmp")
+        tmp.write_text(job.model_dump_json(), encoding="utf-8")
+        tmp.replace(self._path(job.job_id))  # atomic on POSIX
+
+    def create(self) -> JobDetail:
+        job_id = uuid.uuid4().hex[:12]
+        job = JobDetail(job_id=job_id, status=JobStatus.pending)
+        with self._lock:
+            self._write(job)
+        return job
+
+    def get(self, job_id: str) -> Optional[JobDetail]:
+        path = self._path(job_id)
+        try:
+            data = path.read_text(encoding="utf-8")
+            return JobDetail.model_validate(json.loads(data))
+        except FileNotFoundError:
+            return None
+
+    def update(self, job_id: str, **kwargs) -> JobDetail:
+        path = self._path(job_id)
+        with self._lock:
+            try:
+                data = path.read_text(encoding="utf-8")
+            except FileNotFoundError:
+                raise KeyError(f"Job {job_id} not found")
+            job = JobDetail.model_validate(json.loads(data))
+            updated = job.model_copy(update=kwargs)
+            self._write(updated)
+            return updated
+
+    def delete(self, job_id: str) -> bool:
+        try:
+            self._path(job_id).unlink()
+            return True
+        except FileNotFoundError:
+            return False
+
+
+# ---------------------------------------------------------------------------
+# Default store instance
+# Set JOB_STORE_PATH to a directory (e.g. /data/jobs on a Railway volume)
+# to persist jobs across restarts.  Otherwise falls back to in-memory.
+# ---------------------------------------------------------------------------
+_store_path = os.environ.get("JOB_STORE_PATH", "").strip()
+if _store_path:
+    job_store: JobStore = FileJobStore(_store_path)
+else:
+    job_store: JobStore = InMemoryJobStore()
