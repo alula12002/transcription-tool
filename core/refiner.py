@@ -205,12 +205,13 @@ def _call_claude(system_prompt: str, user_message: str, max_tokens: int = 4096,
 
     for attempt in range(max_attempts):
         try:
-            response = client.messages.create(
+            with client.messages.stream(
                 model=CLAUDE_MODEL,
                 max_tokens=max_tokens,
                 system=system_prompt,
                 messages=[{"role": "user", "content": user_message}],
-            )
+            ) as stream:
+                response = stream.get_final_message()
 
             # Check for truncation
             if response.stop_reason == "max_tokens":
