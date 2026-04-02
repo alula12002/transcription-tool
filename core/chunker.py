@@ -185,6 +185,10 @@ def process_zip(zip_path: str, work_dir: str = "temp_audio") -> tuple[list[str],
             if file_info.filename.endswith('/'):
                 continue
 
+            # Skip macOS resource fork metadata files
+            if '__MACOSX/' in file_info.filename or Path(file_info.filename).name.startswith('._'):
+                continue
+
             file_ext = Path(file_info.filename).suffix.lower()
 
             if file_ext in SUPPORTED_AUDIO_EXTENSIONS:
